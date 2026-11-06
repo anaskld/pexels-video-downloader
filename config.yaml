@@ -5,6 +5,9 @@
 # API key stays in .env (never commit it).
 #
 # Get a free key: https://www.pexels.com/api/
+#
+# Tip: LIBRARY.md uses each clip's Pexels title as **Scene** for AI matching.
+# Category = mood bucket. Scene = what is actually visible in the clip.
 # =============================================================================
 
 # --- Download settings -------------------------------------------------------
@@ -44,6 +47,7 @@ settings:
 # - queries:     Pexels search terms (multiple queries = more variety)
 
 categories:
+  # --- Existing foundation moods -------------------------------------------
   - folder: people-laughing
     description: Friends, couples, and groups laughing.
     queries:
@@ -125,3 +129,85 @@ categories:
       - rain on window
       - smoke atmospheric
       - water ripples surface
+
+  # --- Psychology-priority expansions (relationship / anxiety / identity) ---
+  - folder: couple-conflict
+    description: Relationship tension — distance, arguing, turned away.
+    queries:
+      - couple arguing
+      - couple arguing outdoors
+      - couple sitting apart
+      - relationship conflict
+      - couple turned away
+
+  - folder: couple-closeness
+    description: Warm attachment — holding hands, comfort, embrace.
+    queries:
+      - couple holding hands
+      - couple hugging
+      - couple comforting each other
+      - couple walking holding hands
+      - romantic couple embrace
+
+  - folder: family-dynamics
+    description: Parent-child and family-table moments.
+    queries:
+      - family talking at table
+      - parent and child talking
+      - mother and daughter talking
+      - father and son outdoors
+      - family dinner conversation
+
+  - folder: checking-phone
+    description: Anxious phone checking / staring at a screen.
+    queries:
+      - person checking phone
+      - woman looking at phone worried
+      - man scrolling phone alone
+      - anxious looking at smartphone
+      - person staring at phone in bed
+
+  - folder: hands-fidgeting
+    description: Close-up nervous hands, fidgeting, restless gestures.
+    queries:
+      - hands fidgeting
+      - nervous hands close up
+      - person wringing hands
+      - anxious hands tapping
+      - fingers fidgeting
+
+  - folder: sleep-insomnia
+    description: Lying awake, restless nights, insomnia mood.
+    queries:
+      - person lying awake in bed
+      - insomnia woman in bed
+      - man cannot sleep
+      - restless sleep at night
+      - staring at ceiling in bed
+
+  - folder: rain-window
+    description: Rain on glass — versatile moody weather shot.
+    queries:
+      - rain on window
+      - raindrops on glass
+      - looking through rainy window
+      - rainy window city
+      - storm rain on window
+
+  - folder: mirror-reflection
+    description: Looking in a mirror — self-image / identity beats.
+    queries:
+      - woman looking in mirror
+      - man looking in mirror
+      - person staring at mirror
+      - mirror reflection portrait
+      - looking at self in mirror
+
+  - folder: journaling-writing
+    description: Writing and quiet reflection on paper.
+    queries:
+      - person writing in journal
+      - woman writing notebook
+      - journaling at desk
+      - writing diary close up
+      - man writing in notebook

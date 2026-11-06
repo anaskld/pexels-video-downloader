@@ -16,7 +16,7 @@ Configure everything in `config.yaml`. The only thing you need is a **free** [Pe
 | --------------------------- | ---------------------------------------------------- |
 | Bulk download Pexels videos | Category folders + multiple search queries           |
 | Vertical / Shorts footage   | `orientation: portrait` (or landscape / square)      |
-| Organized library           | Auto `LIBRARY.md` catalog with durations & links     |
+| Organized library           | Auto `LIBRARY.md` with per-clip **Scene** titles for AI matching |
 | Safe to re-run              | Dedupes IDs, resumes missing clips, rate-limit aware |
 | Free to use                 | MIT license — use commercially, modify, share        |
 
@@ -32,9 +32,8 @@ This is **not** a scraper of the website. It uses the official **Pexels Video AP
 - Resumable downloads — skip folders that are already full
 - Rate-limit friendly delays + automatic backoff on HTTP 429
 - Security-minded: API key stays in `.env`, path traversal blocked, download hosts allowlisted
-- Generates `LIBRARY.md` for your editing / automation pipeline
-
-
+- Generates `LIBRARY.md` with **per-clip Scene descriptions** (from Pexels URL titles) for AI matching
+- `--enrich-library` / `--enrich-state` upgrade an existing catalog without re-downloading videos
 
 ## Quick start (free)
 
@@ -92,7 +91,7 @@ categories:
       - gentle ocean waves
 ```
 
-The starter config includes Shorts-friendly examples (people, city, nature, abstract mood). Swap them for your niche.
+The starter config includes Shorts-friendly mood folders (people, city, nature, abstract) plus psychology-oriented ones (relationship conflict/closeness, phone anxiety, insomnia, mirror, journaling, and more). Swap them for your niche.
 
 ## CLI reference
 
@@ -103,32 +102,37 @@ python download_pexels.py --category nature-calm
 python download_pexels.py --per-category 5
 python download_pexels.py --config /path/to/other-config.yaml
 python download_pexels.py --regen-manifest
+python download_pexels.py --enrich-library /path/to/LIBRARY.md
+python download_pexels.py --enrich-state
 ```
 
 
-| Flag               | Meaning                      |
-| ------------------ | ---------------------------- |
-| `--dry-run`        | Search only; do not download |
-| `--category NAME`  | Download one category folder |
-| `--per-category N` | Override count for this run  |
-| `--config PATH`    | Use another YAML config      |
-| `--regen-manifest` | Rebuild `LIBRARY.md` only    |
+| Flag | Meaning |
+| ---- | ------- |
+| `--dry-run` | Search only; do not download |
+| `--category NAME` | Download one category folder |
+| `--per-category N` | Override count for this run |
+| `--config PATH` | Use another YAML config |
+| `--regen-manifest` | Rebuild `LIBRARY.md` only |
+| `--enrich-library PATH` | Rewrite Scene titles from Pexels URLs (videos untouched) |
+| `--enrich-state` | Backfill scenes in `download_state.json` + regenerate `LIBRARY.md` |
 
+### AI matching tip
 
-
+Pexels does not return titles via API — this tool parses the descriptive slug from each video URL (official Pexels guidance). `LIBRARY.md` stores that as **Scene**, so your matcher can distinguish “five women eating cakes” from “friends toasting drinks” inside the same category.
 
 ## Output layout
 
 ```
 downloads/
   people-laughing/
-    01-friends-laughing-9187875.mp4
+    01-five-women-eating-cakes-together-7337217.mp4
   nature-calm/
     …
   LIBRARY.md
 ```
 
-Filename pattern: `{index}-{query-slug}-{pexels-id}.mp4`
+Filename pattern: `{index}-{scene-slug}-{pexels-id}.mp4`
 
 ## Rate limits
 
@@ -138,7 +142,7 @@ Pexels free tier is typically **200 requests/hour** and **20,000/month**. This t
 - retries after `429 Too Many Requests`
 - prints remaining quota when the API provides it
 
-A library of ~100 videos is well within the free tier.
+A library of ~200 videos (e.g. 19 categories × 10) is well within the free tier.
 
 ## Security
 
@@ -163,9 +167,10 @@ Downloaded videos remain under the [Pexels License](https://www.pexels.com/licen
 
 1. Start with `--dry-run` or `--per-category 2` to test queries.
 2. Delete clips you dislike, then re-run to refill the folder.
-3. Rename files for richer descriptions (`01-two-friends-laughing-cafe.mp4`) — keep the numeric prefix.
-4. Run `--regen-manifest` after manual cleanup.
+3. New downloads already use the Pexels scene title in the filename + `LIBRARY.md`.
+4. Run `--regen-manifest` after manual cleanup; use `--enrich-library` on older catalogs.
 5. Keep `.env` private. If you ever commit a key by mistake, revoke it in your Pexels dashboard and create a new one.
+6. Download new psychology categories one at a time, e.g. `--category couple-conflict --per-category 20`.
 
 ## Disclaimer
 

@@ -15,6 +15,7 @@ Examples:
   python download_pexels.py --per-category 5
   python download_pexels.py --config /path/to/config.yaml
   python download_pexels.py --regen-manifest
+  python download_pexels.py --enrich-library /path/to/LIBRARY.md
 """
 
 from __future__ import annotations
@@ -360,12 +361,73 @@ def pick_best_file(video: dict[str, Any], settings: Settings) -> dict[str, Any] 
     return sorted(files, key=score)[0]
 
 
-def description_from_query(query: str) -> str:
-    return query.strip().capitalize()
+def title_from_pexels_url(url: str, video_id: int | None = None) -> str:
+    """
+    Pexels API does not expose titles; official guidance is to parse the URL slug.
+
+    Example:
+      https://www.pexels.com/video/five-women-eating-cakes-together-7337217/
+      → "Five women eating cakes together"
+    """
+    if not url:
+        return ""
+    path = urlparse(url).path.rstrip("/")
+    if not path:
+        return ""
+    slug = path.split("/")[-1]
+    if not slug:
+        return ""
+
+    if video_id is not None and slug.endswith(f"-{video_id}"):
+        slug = slug[: -(len(str(video_id)) + 1)]
+    else:
+        slug = re.sub(r"-\d+$", "", slug)
+
+    words = [w for w in slug.replace("_", "-").split("-") if w]
+    if not words:
+        return ""
+    # Sentence case — readable for AI matching prompts
+    text = " ".join(words)
+    return text[:1].upper() + text[1:]
 
 
-def build_filename(index: int, query: str, video_id: int) -> str:
-    return f"{index:02d}-{slugify(query)}-{video_id}.mp4"
+def scene_description(video: dict[str, Any], fallback_query: str = "") -> str:
+    """Best human/AI-readable scene label for a Pexels video object."""
+    vid = int(video.get("id") or 0) or None
+    title = title_from_pexels_url(str(video.get("url") or ""), vid)
+    if title:
+        return title
+    if fallback_query:
+        return fallback_query.strip()[:1].upper() + fallback_query.strip()[1:]
+    return f"Pexels video {vid}" if vid else "Untitled clip"
+
+
+def build_filename(index: int, scene: str, video_id: int) -> str:
+    return f"{index:02d}-{slugify(scene)}-{video_id}.mp4"
+
+
+def clip_scene(clip: dict[str, Any]) -> str:
+    """Prefer stored scene title; fall back to URL parse, then query."""
+    for key in ("scene", "title", "description"):
+        val = str(clip.get(key) or "").strip()
+        if val:
+            # Skip generic query-only leftovers when URL can do better
+            if key == "description":
+                break
+            return val
+    title = title_from_pexels_url(
+        str(clip.get("pexels_url") or ""),
+        int(clip["pexels_id"]) if clip.get("pexels_id") else None,
+    )
+    if title:
+        return title
+    desc = str(clip.get("description") or "").strip()
+    if desc:
+        return desc
+    query = str(clip.get("query") or "").strip()
+    if query:
+        return query[:1].upper() + query[1:]
+    return "Untitled clip"
 
 
 def write_library_md(
@@ -390,6 +452,15 @@ def write_library_md(
         "",
         "Durations come from the API; re-probe with ffprobe if you trim files.",
         "",
+        "**AI matching:** use each clip’s **Scene** field (from the Pexels title "
+        "slug), not the category alone. Category = mood bucket; Scene = what is "
+        "actually visible in the clip.",
+        "",
+        "Selection rule of thumb:",
+        "- Match literally when the script beat is concrete (laughing, walking, talking).",
+        "- Prefer the Scene that best matches the beat’s visual details.",
+        "- Otherwise pull from `abstract-mood` (or `nature-calm` / `night-city` / `rain-window`).",
+        "",
     ]
 
     for folder, items in by_cat.items():
@@ -398,19 +469,183 @@ def write_library_md(
         items = sorted(items, key=lambda c: c["index"])
         meta = cat_meta.get(folder)
         lines.append(f"## {folder}")
-        if meta and meta.description:
-            lines.append("")
-            lines.append(meta.description)
         lines.append("")
+        if meta and meta.description:
+            lines.append(meta.description)
+            lines.append("")
         for clip in items:
+            scene = clip_scene(clip)
+            query = str(clip.get("query") or "").strip()
+            query_bit = f" · search: `{query}`" if query else ""
             lines.append(
-                f"{clip['index']}. `{clip['filename']}` — {clip['description']} "
-                f"({clip['duration']}s, {clip['width']}x{clip['height']}) "
-                f"— [Pexels]({clip['pexels_url']}) by {clip['photographer']}"
+                f"{clip['index']}. **Scene:** {scene}  \n"
+                f"   `{clip['filename']}` · {clip['duration']}s · "
+                f"{clip['width']}x{clip['height']}{query_bit} · "
+                f"[Pexels]({clip['pexels_url']}) by {clip['photographer']}"
             )
         lines.append("")
 
     (out_dir / LIBRARY_MD).write_text("\n".join(lines), encoding="utf-8")
+
+
+_LIBRARY_ENTRY_RE = re.compile(
+    r"^(?P<index>\d+)\.\s+`(?P<filename>[^`]+)`\s+[—-]\s+"
+    r"(?P<old_desc>.+?)\s+\((?P<duration>\d+)s,\s*"
+    r"(?P<width>\d+)x(?P<height>\d+)\)\s+[—-]\s+"
+    r"\[Pexels\]\((?P<url>[^)]+)\)\s+by\s+(?P<photographer>.+?)\s*$"
+)
+_LIBRARY_SCENE_RE = re.compile(
+    r"^(?P<index>\d+)\.\s+\*\*Scene:\*\*\s+(?P<scene>.+?)\s*$"
+)
+_LIBRARY_SCENE_META_RE = re.compile(
+    r"^`(?P<filename>[^`]+)`\s+·\s+(?P<duration>\d+)s\s+·\s+"
+    r"(?P<width>\d+)x(?P<height>\d+)"
+    r"(?:\s+·\s+search:\s+`(?P<query>[^`]+)`)?\s+·\s+"
+    r"\[Pexels\]\((?P<url>[^)]+)\)\s+by\s+(?P<photographer>.+?)\s*$"
+)
+
+
+def _format_library_entry(
+    index: str | int,
+    filename: str,
+    scene: str,
+    duration: str | int,
+    width: str | int,
+    height: str | int,
+    url: str,
+    photographer: str,
+    query: str = "",
+) -> list[str]:
+    query_bit = f" · search: `{query}`" if query else ""
+    return [
+        f"{index}. **Scene:** {scene}  ",
+        (
+            f"   `{filename}` · {duration}s · {width}x{height}{query_bit} · "
+            f"[Pexels]({url}) by {photographer}"
+        ),
+    ]
+
+
+def enrich_library_markdown(library_path: Path) -> int:
+    """
+    Rewrite an existing LIBRARY.md so each clip uses the Pexels URL title as Scene.
+    Does not touch video files. Works on the legacy one-line format and the new format.
+    """
+    library_path = library_path.expanduser().resolve()
+    if not library_path.is_file():
+        raise FileNotFoundError(f"LIBRARY.md not found: {library_path}")
+
+    lines = library_path.read_text(encoding="utf-8").splitlines()
+    out: list[str] = [
+        "# Video Library",
+        "",
+        "Auto-generated catalog of clips downloaded from Pexels.",
+        "",
+        "**AI matching:** use each clip’s **Scene** field (from the Pexels title "
+        "slug), not the category alone. Category = mood bucket; Scene = what is "
+        "actually visible in the clip.",
+        "",
+        "Selection rule of thumb:",
+        "- Match literally when the script beat is concrete (laughing, walking, talking).",
+        "- Prefer the Scene that best matches the beat’s visual details.",
+        "- Otherwise pull from `abstract-mood` (or `nature-calm` / `night-city` / `rain-window`).",
+        "",
+    ]
+
+    # Keep category headings + prose; rewrite clip entries only
+    i = 0
+    while i < len(lines) and not lines[i].startswith("## "):
+        i += 1
+
+    updated = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        if stripped.startswith("## "):
+            if out and out[-1] != "":
+                out.append("")
+            out.append(stripped)
+            out.append("")
+            i += 1
+            # Keep non-empty category description lines until first clip entry
+            while i < len(lines):
+                nxt = lines[i].strip()
+                if not nxt:
+                    i += 1
+                    continue
+                if nxt.startswith("## ") or _LIBRARY_ENTRY_RE.match(nxt) or _LIBRARY_SCENE_RE.match(nxt):
+                    break
+                out.append(nxt)
+                out.append("")
+                i += 1
+            continue
+
+        m_old = _LIBRARY_ENTRY_RE.match(stripped)
+        if m_old:
+            vid_m = re.search(r"-(\d+)\.mp4$", m_old.group("filename"))
+            vid = int(vid_m.group(1)) if vid_m else None
+            scene = (
+                title_from_pexels_url(m_old.group("url"), vid)
+                or m_old.group("old_desc").strip()
+            )
+            q_m = re.match(r"^\d+-(.+)-\d+\.mp4$", m_old.group("filename"))
+            query = q_m.group(1).replace("-", " ") if q_m else ""
+            out.extend(
+                _format_library_entry(
+                    m_old.group("index"),
+                    m_old.group("filename"),
+                    scene,
+                    m_old.group("duration"),
+                    m_old.group("width"),
+                    m_old.group("height"),
+                    m_old.group("url"),
+                    m_old.group("photographer").strip(),
+                    query,
+                )
+            )
+            updated += 1
+            i += 1
+            continue
+
+        m_scene = _LIBRARY_SCENE_RE.match(stripped)
+        if m_scene and i + 1 < len(lines):
+            m_meta = _LIBRARY_SCENE_META_RE.match(lines[i + 1].strip())
+            if m_meta:
+                vid_m = re.search(r"-(\d+)\.mp4$", m_meta.group("filename"))
+                vid = int(vid_m.group(1)) if vid_m else None
+                scene = (
+                    title_from_pexels_url(m_meta.group("url"), vid)
+                    or m_scene.group("scene").strip()
+                )
+                query = (m_meta.group("query") or "").strip()
+                if not query:
+                    q_m = re.match(r"^\d+-(.+)-\d+\.mp4$", m_meta.group("filename"))
+                    query = q_m.group(1).replace("-", " ") if q_m else ""
+                out.extend(
+                    _format_library_entry(
+                        m_scene.group("index"),
+                        m_meta.group("filename"),
+                        scene,
+                        m_meta.group("duration"),
+                        m_meta.group("width"),
+                        m_meta.group("height"),
+                        m_meta.group("url"),
+                        m_meta.group("photographer").strip(),
+                        query,
+                    )
+                )
+                updated += 1
+                i += 2
+                continue
+
+        # Skip blank noise; preserve anything unexpected
+        if stripped:
+            out.append(line)
+        i += 1
+
+    library_path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+    return updated
 
 
 def collect_candidates(
@@ -529,14 +764,17 @@ def download_category(
     idx = next_index(folder)
 
     for query, video, best in candidates:
-        filename = build_filename(idx, query, int(video["id"]))
+        scene = scene_description(video, fallback_query=query)
+        filename = build_filename(idx, scene, int(video["id"]))
         dest = folder / filename
         user = video.get("user") or {}
         clip = {
             "category": category.folder,
             "index": idx,
             "filename": filename,
-            "description": description_from_query(query),
+            "scene": scene,
+            "title": scene,
+            "description": scene,  # AI-facing label (Pexels title, not search query)
             "duration": int(video.get("duration", 0)),
             "pexels_id": int(video["id"]),
             "pexels_url": video.get("url", ""),
@@ -548,12 +786,14 @@ def download_category(
 
         if dry_run:
             print(
-                f"  [dry-run] would download {filename} "
+                f"  [dry-run] would download {filename}\n"
+                f"            scene={scene!r} "
                 f"({clip['duration']}s, {clip['width']}x{clip['height']})"
             )
         else:
             print(
-                f"  Downloading {filename} "
+                f"  Downloading {filename}\n"
+                f"            scene={scene!r} "
                 f"({clip['duration']}s, {clip['width']}x{clip['height']})…"
             )
             client.download_file(best["link"], dest)
@@ -590,14 +830,25 @@ def regen_manifest_from_disk(
             index, slug, vid_s = int(m.group(1)), m.group(2), int(m.group(3))
             existing = by_id.get(vid_s)
             if existing:
-                clips.append({**existing, "index": index, "filename": path.name})
+                merged = {**existing, "index": index, "filename": path.name}
+                # Prefer Pexels URL title over stale query-based descriptions
+                scene = clip_scene(merged)
+                merged["scene"] = scene
+                merged["title"] = scene
+                merged["description"] = scene
+                clips.append(merged)
             else:
+                # Filename slug is often the scene (new downloads) or search query (legacy)
+                guess = slug.replace("-", " ")
+                guess = guess[:1].upper() + guess[1:] if guess else "Untitled clip"
                 clips.append(
                     {
                         "category": cat.folder,
                         "index": index,
                         "filename": path.name,
-                        "description": slug.replace("-", " ").capitalize(),
+                        "scene": guess,
+                        "title": guess,
+                        "description": guess,
                         "duration": 0,
                         "pexels_id": vid_s,
                         "pexels_url": f"https://www.pexels.com/video/{vid_s}/",
@@ -642,12 +893,61 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Rebuild LIBRARY.md from disk + state without downloading",
     )
+    p.add_argument(
+        "--enrich-library",
+        type=Path,
+        metavar="LIBRARY.md",
+        help=(
+            "Rewrite an existing LIBRARY.md so each clip uses the Pexels URL "
+            "title as Scene (does not delete or modify video files)"
+        ),
+    )
+    p.add_argument(
+        "--enrich-state",
+        action="store_true",
+        help=(
+            "Update download_state.json clip scenes from pexels_url titles, "
+            "then regenerate LIBRARY.md"
+        ),
+    )
     return p.parse_args()
+
+
+def enrich_state_scenes(state: DownloadState) -> int:
+    """Backfill scene/title/description on saved clips from their Pexels URLs."""
+    n = 0
+    for clip in state.clips:
+        scene = title_from_pexels_url(
+            str(clip.get("pexels_url") or ""),
+            int(clip["pexels_id"]) if clip.get("pexels_id") else None,
+        )
+        if not scene:
+            continue
+        if (
+            clip.get("scene") == scene
+            and clip.get("title") == scene
+            and clip.get("description") == scene
+        ):
+            continue
+        clip["scene"] = scene
+        clip["title"] = scene
+        clip["description"] = scene
+        n += 1
+    return n
 
 
 def main() -> int:
     load_dotenv(ROOT / ".env")
     args = parse_args()
+
+    if args.enrich_library:
+        try:
+            n = enrich_library_markdown(args.enrich_library)
+        except (OSError, ValueError) as exc:
+            print(f"Enrich failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Enriched {n} clip entr(y/ies) in {args.enrich_library.resolve()}")
+        return 0
 
     if not args.config.exists():
         print(
@@ -667,6 +967,14 @@ def main() -> int:
     state_path = resolve_under_root(settings.state_file, label="state_file")
     out_root.mkdir(parents=True, exist_ok=True)
     state = DownloadState.load(state_path)
+
+    if args.enrich_state:
+        n = enrich_state_scenes(state)
+        state.save(state_path)
+        write_library_md(out_root, categories, state.clips, settings)
+        print(f"Updated scenes on {n} clip(s) in {state_path}")
+        print(f"Wrote {out_root / LIBRARY_MD}")
+        return 0
 
     if args.regen_manifest:
         regen_manifest_from_disk(out_root, categories, state, settings)
